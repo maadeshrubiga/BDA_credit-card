@@ -1,18 +1,10 @@
-
 import streamlit as st
 import pandas as pd
 import matplotlib.pyplot as plt
 import seaborn as sns
+import numpy as np
 
-from pyspark.sql import SparkSession
-from pyspark.sql.functions import col, isnan, when, count, mean
-
-# ---------------- SPARK SESSION ----------------
-spark = SparkSession.builder \
-    .appName("CreditCardFraudBigData") \
-    .getOrCreate()
-
-
+# ---------------- PAGE CONFIG ----------------
 st.set_page_config(
     page_title="Credit Card Fraud Detection",
     layout="wide"
@@ -55,11 +47,6 @@ section[data-testid="stSidebar"] {
     border-radius: 12px;
 }
 
-/* Dataframe */
-[data-testid="stDataFrame"] {
-    background-color: #111111;
-}
-
 /* Buttons */
 .stButton>button {
     background-color: #00FFFF;
@@ -69,20 +56,7 @@ section[data-testid="stSidebar"] {
     font-weight: bold;
 }
 
-/* Charts */
-.css-1r6slb0 {
-    background-color: #111111;
-    border-radius: 12px;
-    padding: 10px;
-}
-
-/* Success Message */
-.stSuccess {
-    background-color: #003333;
-    color: #00FFFF;
-}
-
-/* Markdown Text */
+/* Text */
 p, label {
     color: white;
     font-size: 17px;
@@ -90,135 +64,206 @@ p, label {
 
 </style>
 """, unsafe_allow_html=True)
-st.title("💳 Credit Card Fraud Detection Using Big Data Analytics (Spark)")
 
-uploaded_file = st.file_uploader("Upload Credit Card Fraud Dataset (CSV)", type="csv")
+# ---------------- TITLE ----------------
+st.title("💳 Credit Card Fraud Detection Using Big Data Analytics")
 
-if uploaded_file:
-    # Save uploaded file temporarily
-    with open("temp.csv", "wb") as f:
-        f.write(uploaded_file.getbuffer())
+# ---------------- FILE UPLOAD ----------------
+uploaded_file = st.file_uploader(
+    "Upload Credit Card Fraud Dataset (CSV)",
+    type=["csv"]
+)
 
-    # ---------------- LOAD USING SPARK ----------------
-    sdf = spark.read.csv("temp.csv", header=True, inferSchema=True)
+# ---------------- PROCESS DATA ----------------
+if uploaded_file is not None:
 
-    # Convert limited rows to Pandas for visualization
-    df = sdf.limit(50000).toPandas()
+    with st.spinner("Processing Dataset..."):
 
-    # ---------------- DATASET OVERVIEW ----------------
-    st.header("1️⃣ Dataset Overview")
-    st.write("Shape (approx):", (sdf.count(), len(sdf.columns)))
-    st.write("Columns:", sdf.columns)
-    st.dataframe(df.head())
+        # Load CSV using Pandas
+        df = pd.read_csv(uploaded_file)
 
-    # ---------------- DATA TYPES ----------------
-    st.header("2️⃣ Column Data Types")
-    dtype_df = pd.DataFrame(sdf.dtypes, columns=["Column", "Data Type"])
-    st.dataframe(dtype_df)
+        # Limit rows for performance
+        df = df.head(10000)
 
-    # ---------------- DATA QUALITY ----------------
-    st.header("3️⃣ Data Quality Analysis")
+        # ---------------- DATASET OVERVIEW ----------------
+        st.header("1️⃣ Dataset Overview")
 
-    missing = sdf.select([
-        count(when(isnan(c) | col(c).isNull(), c)).alias(c) for c in sdf.columns
-    ]).toPandas().T
+        st.write("Rows:", df.shape[0])
+        st.write("Columns:", df.shape[1])
 
-    duplicates = sdf.count() - sdf.dropDuplicates().count()
+        st.dataframe(df.head())
 
-    col1, col2 = st.columns(2)
-    with col1:
-        st.subheader("Missing Values")
-        st.dataframe(missing)
+        # ---------------- DATA TYPES ----------------
+        st.header("2️⃣ Column Data Types")
 
-    with col2:
-        st.subheader("Duplicate Rows")
-        st.write("Duplicates:", duplicates)
+        dtype_df = pd.DataFrame(
+            df.dtypes,
+            columns=["Data Type"]
+        )
 
-    sdf = sdf.dropDuplicates()
+        st.dataframe(dtype_df)
 
-    # ---------------- CLASS IMBALANCE ----------------
-    st.header("4️⃣ Fraud vs Legitimate Distribution")
+        # ---------------- MISSING VALUES ----------------
+        st.header("3️⃣ Data Quality Analysis")
 
-    class_counts_spark = sdf.groupBy("Class").count().orderBy("Class")
-    class_counts = class_counts_spark.toPandas().set_index("Class")["count"]
+        missing = df.isnull().sum()
 
-    st.dataframe(class_counts)
+        col1, col2 = st.columns(2)
 
-    fig1 = plt.figure()
-    class_counts.plot(kind="bar")
-    plt.xlabel("Class (0 = Legit, 1 = Fraud)")
-    plt.ylabel("Count")
-    plt.title("Fraud vs Legitimate Transactions")
-    st.pyplot(fig1)
+        with col1:
+            st.subheader("Missing Values")
+            st.dataframe(missing)
 
-    # ---------------- DESCRIPTIVE STATS ----------------
-    st.header("5️⃣ Descriptive Statistics")
-    st.dataframe(sdf.describe().toPandas())
+        with col2:
+            st.subheader("Duplicate Rows")
+            st.write(df.duplicated().sum())
 
-    # ---------------- AMOUNT ANALYSIS ----------------
-    st.header("6️⃣ Transaction Amount Analysis")
+        # ---------------- FRAUD DISTRIBUTION ----------------
+        st.header("4️⃣ Fraud vs Legitimate Distribution")
 
-    avg_amt_spark = sdf.groupBy("Class").agg(mean("Amount").alias("AvgAmount"))
-    avg_amt = avg_amt_spark.toPandas().set_index("Class")["AvgAmount"]
+        class_counts = df["Class"].value_counts()
 
-    col3, col4 = st.columns(2)
+        st.dataframe(class_counts)
 
-    with col3:
-        fig2 = plt.figure()
-        avg_amt.plot(kind="bar")
-        plt.title("Average Transaction Amount by Class")
-        st.pyplot(fig2)
+        fig1, ax1 = plt.subplots()
 
-    with col4:
-        fig3 = plt.figure()
-        df["Amount"].hist(bins=50)
-        plt.title("Overall Amount Distribution")
-        st.pyplot(fig3)
+        class_counts.plot(
+            kind="bar",
+            ax=ax1
+        )
 
-    # ---------------- FRAUD AMOUNT ----------------
-    st.header("7️⃣ Fraud Amount Distribution")
+        ax1.set_xlabel("Class")
+        ax1.set_ylabel("Count")
+        ax1.set_title("Fraud vs Legitimate Transactions")
 
-    fig4 = plt.figure()
-    df[df["Class"] == 1]["Amount"].hist(bins=30)
-    plt.title("Fraud Transaction Amount Distribution")
-    st.pyplot(fig4)
+        st.pyplot(fig1)
 
-    # ---------------- HIGH VALUE FRAUD ----------------
-    st.header("8️⃣ High Value Fraud Transactions")
+        # ---------------- DESCRIPTIVE STATS ----------------
+        st.header("5️⃣ Descriptive Statistics")
 
-    top_fraud = sdf.filter(col("Class") == 1).orderBy(col("Amount").desc()).limit(10)
-    st.dataframe(top_fraud.toPandas())
+        st.dataframe(df.describe())
 
-    # ---------------- CORRELATION ----------------
-    st.header("9️⃣ Correlation Analysis (Sample)")
+        # ---------------- AMOUNT ANALYSIS ----------------
+        st.header("6️⃣ Transaction Amount Analysis")
 
-    numeric_cols = df.select_dtypes(include="number").columns[:10]
-    corr = df[numeric_cols].corr()
+        avg_amt = df.groupby("Class")["Amount"].mean()
 
-    fig5 = plt.figure(figsize=(8, 6))
-    sns.heatmap(corr, cmap="coolwarm")
-    plt.title("Correlation Heatmap")
-    st.pyplot(fig5)
+        col3, col4 = st.columns(2)
 
-    # ---------------- METRICS ----------------
-    st.header("🔟 Key Metrics")
+        with col3:
 
-    total = sdf.count()
-    fraud = class_counts.get(1, 0)
-    fraud_percentage = (fraud / total) * 100
+            fig2, ax2 = plt.subplots()
 
-    st.metric("Fraud Percentage", f"{fraud_percentage:.4f}%")
-    st.metric("Total Transactions", total)
-    st.metric("Fraud Transactions", fraud)
+            avg_amt.plot(
+                kind="bar",
+                ax=ax2
+            )
 
-    # ---------------- INSIGHTS ----------------
-    st.header("💡 Insights & Observations")
-    st.markdown("""
-    - Spark processes the full dataset using distributed computing
-    - Only samples are converted to Pandas for visualization
-    - Dataset is highly imbalanced
-    - High-value fraud transactions pose major financial risks
-    - Spark enables scalable fraud analytics for big data
-    """)
+            ax2.set_title(
+                "Average Transaction Amount by Class"
+            )
 
-    st.success("✅ Spark-Based Credit Card Fraud Analysis Completed Successfully")
+            st.pyplot(fig2)
+
+        with col4:
+
+            fig3, ax3 = plt.subplots()
+
+            df["Amount"].hist(
+                bins=50,
+                ax=ax3
+            )
+
+            ax3.set_title(
+                "Overall Amount Distribution"
+            )
+
+            st.pyplot(fig3)
+
+        # ---------------- FRAUD AMOUNT ----------------
+        st.header("7️⃣ Fraud Amount Distribution")
+
+        fig4, ax4 = plt.subplots()
+
+        df[df["Class"] == 1]["Amount"].hist(
+            bins=30,
+            ax=ax4
+        )
+
+        ax4.set_title(
+            "Fraud Transaction Amount Distribution"
+        )
+
+        st.pyplot(fig4)
+
+        # ---------------- TOP FRAUDS ----------------
+        st.header("8️⃣ High Value Fraud Transactions")
+
+        top_fraud = df[df["Class"] == 1] \
+            .sort_values(by="Amount", ascending=False) \
+            .head(10)
+
+        st.dataframe(top_fraud)
+
+        # ---------------- CORRELATION ----------------
+        st.header("9️⃣ Correlation Heatmap")
+
+        numeric_cols = df.select_dtypes(include=np.number)
+
+        corr = numeric_cols.corr()
+
+        fig5, ax5 = plt.subplots(figsize=(8, 6))
+
+        sns.heatmap(
+            corr,
+            cmap="coolwarm",
+            ax=ax5
+        )
+
+        ax5.set_title("Correlation Heatmap")
+
+        st.pyplot(fig5)
+
+        # ---------------- METRICS ----------------
+        st.header("🔟 Key Metrics")
+
+        total = len(df)
+
+        fraud = len(df[df["Class"] == 1])
+
+        fraud_percentage = (fraud / total) * 100
+
+        col5, col6, col7 = st.columns(3)
+
+        with col5:
+            st.metric(
+                "Total Transactions",
+                total
+            )
+
+        with col6:
+            st.metric(
+                "Fraud Transactions",
+                fraud
+            )
+
+        with col7:
+            st.metric(
+                "Fraud Percentage",
+                f"{fraud_percentage:.4f}%"
+            )
+
+        # ---------------- INSIGHTS ----------------
+        st.header("💡 Insights & Observations")
+
+        st.markdown("""
+        - The dataset is highly imbalanced
+        - Fraudulent transactions are very low compared to legitimate transactions
+        - High-value fraud transactions create major financial risks
+        - Big Data Analytics improves fraud monitoring efficiency
+        - Interactive dashboards help in real-time analysis
+        """)
+
+        st.success(
+            "✅ Credit Card Fraud Analysis Completed Successfully"
+        )
